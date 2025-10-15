@@ -5,6 +5,7 @@
 import { JobStorage } from '@/shared/storage';
 import { PERFORMANCE, CACHE } from '@/shared/constants';
 import type { Job } from '@/shared/types';
+import { extractJobDetails } from './extractor';
 
 /**
  * Result of a fetch operation
@@ -163,19 +164,21 @@ async function fetchJobWithRetry(
       };
     }
 
-    // Parse HTML
+    // Parse HTML and extract job details
     const html = await response.text();
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
 
-    const title = doc.querySelector('title')?.textContent?.trim() || 'Unknown Job';
-    const description = doc.body.textContent?.trim() || '';
+    // Use smart extraction based on ATS detection
+    const extracted = extractJobDetails(normalizedUrl, doc);
 
     const job: Partial<Job> = {
       id: normalizedUrl,
       url: normalizedUrl,
-      title,
-      description: description.slice(0, 5000), // Limit size
+      title: extracted.title,
+      company: extracted.company,
+      location: extracted.location,
+      description: extracted.description,
       firstSeen: Date.now(),
       lastUpdated: Date.now(),
     };
