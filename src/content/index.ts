@@ -2,8 +2,10 @@
  * Content script - Injects overlay UI into career pages
  */
 
-import { OVERLAY } from '@/shared/constants';
-import { scanPage, type ScanResult } from './scanner';
+import { OVERLAY, PERFORMANCE } from '@/shared/constants';
+import { scanPage, type ScanResult, type ScannedJob } from './scanner';
+import { normalizeJobUrl } from './scanner';
+import type { Message, Job } from '@/shared/types';
 
 console.log('[Job Triage] Content script loaded');
 
@@ -95,31 +97,162 @@ function createOverlay(): HTMLElement {
 }
 
 /**
- * Update the results area with scan results
+ * Send message to background and wait for response
  */
-function displayResults(result: ScanResult) {
+function sendMessage<T extends Message>(message: T): Promise<any> {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage(message, resolve);
+  });
+}
+
+/**
+ * Fetch job details (description) from background worker
+ */
+async function fetchJobDetails(url: string): Promise<Partial<Job> | null> {
+  try {
+    const response = await sendMessage({
+      type: 'FETCH_JOB',
+      url
+    });
+
+    if (response.error) {
+      console.error(`[Content] Fetch error for ${url}:`, response.error);
+      return null;
+    }
+
+    return response.job;
+  } catch (error) {
+    console.error(`[Content] Failed to fetch ${url}:`, error);
+    return null;
+  }
+}
+
+/**
+ * Compute score for a job using background scorer
+ */
+async function computeScore(job: Partial<Job>): Promise<{ score: number; reasons: string[] } | null> {
+  try {
+    const response = await sendMessage({
+      type: 'COMPUTE_SCORE',
+      job
+    });
+
+    if (response.error) {
+      console.error('[Content] Scoring error:', response.error);
+      return { score: 0, reasons: ['⚠ Scoring failed'] };
+    }
+
+    return {
+      score: response.score,
+      reasons: response.reasons
+    };
+  } catch (error) {
+    console.error('[Content] Failed to score job:', error);
+    return { score: 0, reasons: ['⚠ Scoring failed'] };
+  }
+}
+
+/**
+ * Process jobs with concurrent fetching and scoring
+ */
+async function processJobs(
+  scannedJobs: ScannedJob[],
+  onProgress?: (current: number, total: number, stage: string) => void
+): Promise<Job[]> {
+  const results: Job[] = [];
+  const total = scannedJobs.length;
+
+  // Process jobs with concurrency limit
+  const maxConcurrent = PERFORMANCE.MAX_CONCURRENT_FETCHES;
+
+  for (let i = 0; i < scannedJobs.length; i += maxConcurrent) {
+    const batch = scannedJobs.slice(i, Math.min(i + maxConcurrent, scannedJobs.length));
+
+    // Fetch job details in parallel for this batch
+    const fetchPromises = batch.map(async (scannedJob, batchIndex) => {
+      const jobIndex = i + batchIndex;
+      onProgress?.(jobIndex + 1, total, 'fetching');
+
+      const jobDetails = await fetchJobDetails(scannedJob.url);
+
+      if (!jobDetails || !jobDetails.description) {
+        // Return job without description (won't be scored)
+        return {
+          id: normalizeJobUrl(scannedJob.url),
+          url: scannedJob.url,
+          title: scannedJob.title,
+          location: scannedJob.location,
+          company: scannedJob.company,
+          description: '',
+          score: 0,
+          reasons: ['⚠ Description unavailable'],
+          firstSeen: Date.now(),
+          lastUpdated: Date.now()
+        } as Job;
+      }
+
+      // Score the job
+      onProgress?.(jobIndex + 1, total, 'scoring');
+
+      const scoreResult = await computeScore({
+        ...jobDetails,
+        title: scannedJob.title,
+        location: scannedJob.location,
+        company: scannedJob.company
+      });
+
+      // Create full job object
+      const job: Job = {
+        id: normalizeJobUrl(scannedJob.url),
+        url: scannedJob.url,
+        title: scannedJob.title,
+        location: scannedJob.location,
+        company: scannedJob.company,
+        description: jobDetails.description || '',
+        score: scoreResult?.score || 0,
+        reasons: scoreResult?.reasons || ['⚠ Scoring failed'],
+        firstSeen: Date.now(),
+        lastUpdated: Date.now()
+      };
+
+      return job;
+    });
+
+    const batchResults = await Promise.all(fetchPromises);
+    results.push(...batchResults);
+  }
+
+  // Sort by score descending
+  return results.sort((a, b) => (b.score || 0) - (a.score || 0));
+}
+
+/**
+ * Get score color based on score value
+ */
+function getScoreColor(score: number): string {
+  if (score >= 7.0) return '#4CAF50'; // Green
+  if (score >= 5.0) return '#FF9800'; // Orange
+  return '#9E9E9E'; // Gray
+}
+
+/**
+ * Display scored jobs in the results area
+ */
+function displayScoredJobs(jobs: Job[], atsType: string | null = null) {
   const resultsEl = document.getElementById('job-triage-results');
   if (!resultsEl) return;
 
   // Show ATS type if detected
-  const atsInfo = result.atsType
+  const atsInfo = atsType
     ? `<div style="margin-bottom: 12px; padding: 8px; background: #e8f5e9; border-radius: 4px; font-size: 13px;">
-         Detected: <strong>${result.atsType}</strong>
-       </div>`
-    : '';
-
-  // Show errors if any
-  const errorsInfo = result.errors.length > 0
-    ? `<div style="margin-bottom: 12px; padding: 8px; background: #fff3cd; border-radius: 4px; font-size: 13px; color: #856404;">
-         ${result.errors.join('<br>')}
+         Detected: <strong>${atsType}</strong>
        </div>`
     : '';
 
   // No jobs found
-  if (result.foundCount === 0) {
+  if (jobs.length === 0) {
     resultsEl.innerHTML = `
       ${atsInfo}
-      ${errorsInfo}
       <p style="margin: 0; color: #999;">
         No job listings found on this page. Try a different page or check the URL.
       </p>
@@ -127,38 +260,83 @@ function displayResults(result: ScanResult) {
     return;
   }
 
-  // Display jobs
-  const jobsHTML = result.jobs.map((job, index) => `
-    <div style="
-      margin-bottom: 12px;
-      padding: 12px;
-      border: 1px solid #ddd;
-      border-radius: 4px;
-      font-size: 13px;
-    ">
-      <div style="font-weight: 600; margin-bottom: 4px;">${index + 1}. ${job.title}</div>
-      ${job.location ? `<div style="color: #666; margin-bottom: 4px;">📍 ${job.location}</div>` : ''}
-      ${job.company ? `<div style="color: #666; margin-bottom: 8px;">🏢 ${job.company}</div>` : ''}
-      <a href="${job.url}" target="_blank" style="color: #1976d2; text-decoration: none; font-size: 12px;">
-        View Job →
-      </a>
-    </div>
-  `).join('');
+  // Display jobs (already sorted by score)
+  const jobsHTML = jobs.map((job, index) => {
+    const scoreColor = getScoreColor(job.score || 0);
+    const topReasons = (job.reasons || []).slice(0, 2);
+
+    return `
+      <div style="
+        margin-bottom: 12px;
+        padding: 12px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-size: 13px;
+        ${index < 3 ? 'border-left: 3px solid ' + scoreColor + ';' : ''}
+      ">
+        <div style="display: flex; align-items: center; margin-bottom: 4px;">
+          <div style="
+            background: ${scoreColor};
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-weight: 700;
+            font-size: 14px;
+            margin-right: 8px;
+          ">${(job.score || 0).toFixed(1)}</div>
+          <div style="font-weight: 600; flex: 1;">${job.title}</div>
+        </div>
+        ${job.location ? `<div style="color: #666; margin-bottom: 4px; font-size: 12px;">📍 ${job.location}</div>` : ''}
+        ${job.company ? `<div style="color: #666; margin-bottom: 4px; font-size: 12px;">🏢 ${job.company}</div>` : ''}
+        ${topReasons.length > 0 ? `
+          <div style="margin-top: 8px; margin-bottom: 8px; font-size: 12px; color: #555;">
+            ${topReasons.map(r => `<div style="margin-bottom: 2px;">${r}</div>`).join('')}
+          </div>
+        ` : ''}
+        <a href="${job.url}" target="_blank" style="color: #1976d2; text-decoration: none; font-size: 12px;">
+          View Job →
+        </a>
+      </div>
+    `;
+  }).join('');
 
   resultsEl.innerHTML = `
     ${atsInfo}
-    ${errorsInfo}
     <div style="margin-bottom: 12px; font-weight: 600; color: #333;">
-      Found ${result.foundCount} job${result.foundCount === 1 ? '' : 's'}
+      Found ${jobs.length} job${jobs.length === 1 ? '' : 's'} (sorted by score)
     </div>
     ${jobsHTML}
   `;
 }
 
 /**
+ * Update progress during job processing
+ */
+function updateProgress(current: number, total: number, stage: string) {
+  const resultsEl = document.getElementById('job-triage-results');
+  if (!resultsEl) return;
+
+  const stageText = stage === 'fetching' ? 'Fetching job details' : 'Scoring jobs';
+  const percentage = Math.round((current / total) * 100);
+
+  resultsEl.innerHTML = `
+    <div style="text-align: center; color: #666;">
+      <div style="margin-bottom: 12px; font-size: 18px;">🔍</div>
+      <div style="font-weight: 600; margin-bottom: 8px;">${stageText}...</div>
+      <div style="margin-bottom: 12px; color: #999; font-size: 13px;">
+        ${current} / ${total} (${percentage}%)
+      </div>
+      <div style="width: 100%; height: 6px; background: #eee; border-radius: 3px; overflow: hidden;">
+        <div style="width: ${percentage}%; height: 100%; background: #4CAF50; transition: width 0.3s ease;"></div>
+      </div>
+    </div>
+  `;
+}
+
+/**
  * Handle scan button click
  */
-function handleScan() {
+async function handleScan() {
   const scanBtn = document.getElementById('job-triage-scan-btn') as HTMLButtonElement;
   const resultsEl = document.getElementById('job-triage-results');
 
@@ -176,24 +354,48 @@ function handleScan() {
     </div>
   `;
 
-  // Run scanner (use setTimeout to allow UI to update)
-  setTimeout(() => {
-    try {
-      const result = scanPage();
-      displayResults(result);
-    } catch (error) {
+  try {
+    // Step 1: Scan page for jobs
+    const scanResult = scanPage();
+
+    if (scanResult.foundCount === 0 || scanResult.errors.length > 0) {
+      // Show scan errors or empty state
       resultsEl.innerHTML = `
-        <div style="padding: 12px; background: #ffebee; border-radius: 4px; color: #c62828;">
-          <strong>Error:</strong> ${error instanceof Error ? error.message : 'Failed to scan page'}
-        </div>
+        ${scanResult.errors.length > 0 ? `
+          <div style="margin-bottom: 12px; padding: 8px; background: #fff3cd; border-radius: 4px; font-size: 13px; color: #856404;">
+            ${scanResult.errors.join('<br>')}
+          </div>
+        ` : ''}
+        <p style="margin: 0; color: #999;">
+          No job listings found on this page. Try a different page or check the URL.
+        </p>
       `;
-    } finally {
-      // Reset button
-      scanBtn.disabled = false;
-      scanBtn.textContent = 'Scan This Page';
-      scanBtn.style.background = '#4CAF50';
+      return;
     }
-  }, 100);
+
+    console.log(`[Content] Scanned ${scanResult.foundCount} jobs, fetching details and scoring...`);
+
+    // Step 2: Fetch job details and score jobs
+    const scoredJobs = await processJobs(scanResult.jobs, updateProgress);
+
+    // Step 3: Display scored jobs
+    displayScoredJobs(scoredJobs, scanResult.atsType);
+
+    console.log(`[Content] Successfully processed ${scoredJobs.length} jobs`);
+
+  } catch (error) {
+    console.error('[Content] Scan error:', error);
+    resultsEl.innerHTML = `
+      <div style="padding: 12px; background: #ffebee; border-radius: 4px; color: #c62828;">
+        <strong>Error:</strong> ${error instanceof Error ? error.message : 'Failed to scan page'}
+      </div>
+    `;
+  } finally {
+    // Reset button
+    scanBtn.disabled = false;
+    scanBtn.textContent = 'Scan This Page';
+    scanBtn.style.background = '#4CAF50';
+  }
 }
 
 /**
