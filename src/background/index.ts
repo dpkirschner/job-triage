@@ -3,6 +3,7 @@
  */
 
 import { initDatabase } from '@/shared/storage';
+import { fetchJob } from './fetcher';
 import type { Message } from '@/shared/types';
 
 console.log('[Job Triage] Background service worker initialized');
@@ -53,34 +54,25 @@ chrome.runtime.onMessage.addListener((message: Message, sender, sendResponse) =>
 });
 
 /**
- * Fetch job details from URL
+ * Fetch job details from URL using the robust fetcher
  */
 async function handleFetchJob(url: string) {
-  try {
-    console.log(`[Job Triage] Fetching job from: ${url}`);
+  console.log(`[Job Triage] Fetching job from: ${url}`);
 
-    const response = await fetch(url);
-    const html = await response.text();
+  const result = await fetchJob(url);
 
-    // Basic extraction (placeholder - will be enhanced in later phases)
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(html, 'text/html');
-    const title = doc.querySelector('title')?.textContent || 'Unknown Job';
-    const description = doc.body.textContent || '';
-
+  if (result.success) {
     return {
       type: 'FETCH_JOB_RESPONSE',
-      job: {
-        url,
-        title,
-        description: description.slice(0, 5000), // Limit size
-      },
+      job: result.job,
+      fromCache: result.fromCache,
+      fetchedAt: result.fetchedAt,
     };
-  } catch (error) {
-    console.error('[Job Triage] Fetch error:', error);
+  } else {
+    console.error('[Job Triage] Fetch error:', result.error);
     return {
       type: 'FETCH_JOB_RESPONSE',
-      error: error instanceof Error ? error.message : 'Unknown error',
+      error: result.error,
     };
   }
 }
