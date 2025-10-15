@@ -2,9 +2,11 @@
  * Background service worker - Handles fetching, scoring, and caching
  */
 
-import { initDatabase } from '@/shared/storage';
+import { initDatabase, SettingsStorage, JobStorage } from '@/shared/storage';
 import { fetchJob } from './fetcher';
-import type { Message } from '@/shared/types';
+import { scoreJob } from './scorer';
+import type { Message, Job, Settings } from '@/shared/types';
+import { DEFAULT_SETTINGS } from '@/shared/constants';
 
 console.log('[Job Triage] Background service worker initialized');
 
@@ -78,61 +80,146 @@ async function handleFetchJob(url: string) {
 }
 
 /**
- * Compute score for a job (placeholder)
+ * Compute score for a job using the scoring engine
  */
-async function handleComputeScore(job: any) {
-  // Placeholder scoring - will be enhanced in later phases
-  const score = Math.random() * 10;
-  const reasons = ['Keyword match found', 'Location preference matched'];
+async function handleComputeScore(job: Partial<Job>) {
+  try {
+    // Load settings from storage
+    let settings = await SettingsStorage.get();
 
-  return {
-    type: 'COMPUTE_SCORE_RESPONSE',
-    score,
-    reasons,
-  };
+    // Use defaults if no settings found
+    if (!settings) {
+      console.warn('[Job Triage] No settings found, using defaults');
+      settings = DEFAULT_SETTINGS;
+    }
+
+    // Score the job
+    const result = await scoreJob(job, settings);
+
+    // Update job with score and save
+    if (job.id) {
+      const existingJob = await JobStorage.get(job.id);
+      if (existingJob) {
+        const updatedJob: Job = {
+          ...existingJob,
+          score: result.score,
+          reasons: result.reasons,
+          lastUpdated: Date.now()
+        };
+        await JobStorage.save(updatedJob);
+      }
+    }
+
+    return {
+      type: 'COMPUTE_SCORE_RESPONSE',
+      score: result.score,
+      reasons: result.reasons,
+    };
+  } catch (error) {
+    console.error('[Job Triage] Scoring error:', error);
+    return {
+      type: 'COMPUTE_SCORE_RESPONSE',
+      error: error instanceof Error ? error.message : 'Scoring failed',
+      score: 0,
+      reasons: ['⚠ Scoring failed']
+    };
+  }
 }
 
 /**
- * Get user settings (placeholder)
+ * Get user settings from storage
  */
 async function handleGetSettings() {
-  // Will be implemented with storage layer
-  return {
-    type: 'GET_SETTINGS_RESPONSE',
-    settings: {
-      resume: '',
-      preferredStacks: [],
-      preferredRoles: [],
-      locationPreferences: {
-        remote: true,
-        hybrid: true,
-        onsite: false,
-      },
-      scoringWeights: {
-        similarity: 0.6,
-        keyword: 0.2,
-        role: 0.1,
-        location: 0.1,
-      },
-      scoreThreshold: 7.0,
-    },
-  };
+  try {
+    let settings = await SettingsStorage.get();
+
+    // Return defaults if no settings found
+    if (!settings) {
+      settings = DEFAULT_SETTINGS;
+    }
+
+    return {
+      type: 'GET_SETTINGS_RESPONSE',
+      settings,
+    };
+  } catch (error) {
+    console.error('[Job Triage] Error loading settings:', error);
+    return {
+      type: 'GET_SETTINGS_RESPONSE',
+      settings: DEFAULT_SETTINGS,
+      error: 'Failed to load settings'
+    };
+  }
 }
 
 /**
- * Update settings (placeholder)
+ * Update user settings in storage
  */
-async function handleUpdateSettings(settings: any) {
-  console.log('[Job Triage] Updating settings:', settings);
-  return { success: true };
+async function handleUpdateSettings(settings: Partial<Settings>) {
+  try {
+    // Load existing settings
+    let currentSettings = await SettingsStorage.get();
+
+    // Merge with defaults if no existing settings
+    if (!currentSettings) {
+      currentSettings = DEFAULT_SETTINGS;
+    }
+
+    // Merge new settings with existing
+    const updatedSettings: Settings = {
+      ...currentSettings,
+      ...settings
+    };
+
+    // Save to storage
+    await SettingsStorage.save(updatedSettings);
+
+    console.log('[Job Triage] Settings updated successfully');
+    return { success: true };
+  } catch (error) {
+    console.error('[Job Triage] Error updating settings:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to update settings'
+    };
+  }
 }
 
 /**
- * Save user decision (placeholder)
+ * Save user decision for a job
  */
 async function handleSaveDecision(jobId: string, decision: 'thumbs_up' | 'thumbs_down') {
-  console.log(`[Job Triage] Saving decision for ${jobId}:`, decision);
-  return { success: true };
+  try {
+    // Load existing job
+    const job = await JobStorage.get(jobId);
+
+    if (!job) {
+      console.error(`[Job Triage] Job not found: ${jobId}`);
+      return {
+        success: false,
+        error: 'Job not found'
+      };
+    }
+
+    // Update job with decision
+    const updatedJob: Job = {
+      ...job,
+      decision,
+      lastUpdated: Date.now()
+    };
+
+    // Save updated job
+    await JobStorage.save(updatedJob);
+
+    console.log(`[Job Triage] Decision saved for ${jobId}:`, decision);
+    return { success: true };
+  } catch (error) {
+    console.error(`[Job Triage] Error saving decision:`, error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to save decision'
+    };
+  }
 }
 
 /**
