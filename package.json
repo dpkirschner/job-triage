@@ -1,0 +1,21 @@
+{
+  "name": "job-triage",
+  "version": "0.1.0",
+  "description": "Local-first browser extension for triaging job listings",
+  "type": "module",
+  "scripts": {
+    "dev": "vite build --watch",
+    "build": "vite build",
+    "type-check": "tsc --noEmit"
+  },
+  "keywords": ["browser-extension", "jobs", "triage", "local-first"],
+  "author": "",
+  "license": "MIT",
+  "packageManager": "pnpm@10.15.1",
+  "devDependencies": {
+    "@types/chrome": "^0.1.24",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.10",
+    "vite-plugin-static-copy": "^3.1.3"
+  }
+}
