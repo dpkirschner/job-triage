@@ -290,9 +290,28 @@ async function handleLoadCachedJobs(urls: string[]) {
 }
 
 /**
- * Handle extension icon click
+ * Handle extension icon click - inject content script into current tab
  */
-chrome.action.onClicked.addListener((tab) => {
-  console.log('[Job Triage] Extension icon clicked');
-  chrome.runtime.openOptionsPage();
+chrome.action.onClicked.addListener(async (tab) => {
+  console.log('[Job Triage] Extension icon clicked on tab:', tab.id);
+
+  if (!tab.id) {
+    console.error('[Job Triage] No tab ID available');
+    return;
+  }
+
+  try {
+    // Inject the content script into the current tab
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ['content/index.js']
+    });
+
+    console.log('[Job Triage] Content script injected successfully');
+  } catch (error) {
+    console.error('[Job Triage] Failed to inject content script:', error);
+
+    // If injection fails, fall back to opening settings
+    chrome.runtime.openOptionsPage();
+  }
 });

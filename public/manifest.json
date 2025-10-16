@@ -20,22 +20,8 @@
     "service_worker": "background/index.js",
     "type": "module"
   },
-  "content_scripts": [
-    {
-      "matches": [
-        "https://*.greenhouse.io/*",
-        "https://*.lever.co/*",
-        "https://*.ashbyhq.com/*",
-        "https://*.workable.com/*",
-        "https://jobs.*/*",
-        "https://careers.*/*"
-      ],
-      "js": ["content/index.js"],
-      "run_at": "document_idle"
-    }
-  ],
   "options_page": "src/options/index.html",
   "action": {
-    "default_title": "Job Triage Settings"
+    "default_title": "Job Triage - Click to activate on this page"
   }
 }
