@@ -10,6 +10,11 @@ import type { Message, Job } from '@/shared/types';
 console.log('[Job Triage] Content script loaded');
 
 /**
+ * Current jobs state (for updating decisions)
+ */
+let currentJobs: Job[] = [];
+
+/**
  * Check if overlay already exists
  */
 function overlayExists(): boolean {
@@ -70,6 +75,39 @@ function createOverlay(): HTMLElement {
     flex: 1;
   `;
   body.innerHTML = `
+    <!-- Settings Panel -->
+    <div id="job-triage-settings-panel" style="margin-bottom: 16px;">
+      <button id="settings-toggle" style="
+        width: 100%;
+        text-align: left;
+        background: #f5f5f5;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        padding: 10px 12px;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 600;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      ">
+        <span>⚙️ Settings</span>
+        <span id="settings-chevron" style="transition: transform 0.2s;">▼</span>
+      </button>
+      <div id="settings-content" style="
+        display: none;
+        padding: 12px;
+        border: 1px solid #ddd;
+        border-top: none;
+        border-radius: 0 0 4px 4px;
+        background: #fafafa;
+        font-size: 13px;
+      ">
+        <!-- Settings form will be populated here -->
+      </div>
+    </div>
+
+    <!-- Scan Button -->
     <div style="margin-bottom: 16px;">
       <button id="job-triage-scan-btn" style="
         width: 100%;
@@ -83,9 +121,11 @@ function createOverlay(): HTMLElement {
         cursor: pointer;
       ">Scan This Page</button>
     </div>
+
+    <!-- Results Container -->
     <div id="job-triage-results" style="color: #666; font-size: 14px;">
       <p style="margin: 0;">
-        Click "Scan This Page" to find job listings on this page.
+        Configure your settings above, then click "Scan This Page" to find job listings.
       </p>
     </div>
   `;
@@ -97,12 +137,218 @@ function createOverlay(): HTMLElement {
 }
 
 /**
+ * Create settings form HTML
+ */
+function createSettingsForm(): string {
+  return `
+    <div style="margin-bottom: 12px;">
+      <label style="display: block; margin-bottom: 4px; font-weight: 600; font-size: 12px;">
+        Resume / Key Skills
+      </label>
+      <textarea
+        id="settings-resume"
+        placeholder="Paste your resume or key skills (e.g., Python, distributed systems, Kafka, AWS...)"
+        style="
+          width: 100%;
+          min-height: 60px;
+          padding: 8px;
+          border: 1px solid #ddd;
+          border-radius: 4px;
+          font-size: 12px;
+          font-family: inherit;
+          resize: vertical;
+        "
+      ></textarea>
+    </div>
+
+    <div style="margin-bottom: 12px;">
+      <label style="display: block; margin-bottom: 4px; font-weight: 600; font-size: 12px;">
+        Preferred Tech Stacks
+      </label>
+      <input
+        type="text"
+        id="settings-stacks"
+        placeholder="e.g., Python, Kafka, Kubernetes, AWS"
+        style="
+          width: 100%;
+          padding: 8px;
+          border: 1px solid #ddd;
+          border-radius: 4px;
+          font-size: 12px;
+        "
+      />
+    </div>
+
+    <div style="margin-bottom: 12px;">
+      <label style="display: block; margin-bottom: 4px; font-weight: 600; font-size: 12px;">
+        Preferred Roles
+      </label>
+      <input
+        type="text"
+        id="settings-roles"
+        placeholder="e.g., backend, platform, data"
+        style="
+          width: 100%;
+          padding: 8px;
+          border: 1px solid #ddd;
+          border-radius: 4px;
+          font-size: 12px;
+        "
+      />
+    </div>
+
+    <div style="margin-bottom: 12px;">
+      <label style="display: block; margin-bottom: 6px; font-weight: 600; font-size: 12px;">
+        Work Location
+      </label>
+      <div style="display: flex; gap: 12px;">
+        <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+          <input type="checkbox" id="settings-remote" />
+          <span style="font-size: 12px;">Remote</span>
+        </label>
+        <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+          <input type="checkbox" id="settings-hybrid" />
+          <span style="font-size: 12px;">Hybrid</span>
+        </label>
+        <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+          <input type="checkbox" id="settings-onsite" />
+          <span style="font-size: 12px;">Onsite</span>
+        </label>
+      </div>
+    </div>
+
+    <div style="display: flex; gap: 8px; align-items: center;">
+      <button id="save-settings-btn" style="
+        padding: 8px 16px;
+        background: #2196F3;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+      ">Save Settings</button>
+      <span id="settings-saved-indicator" style="
+        display: none;
+        color: #4CAF50;
+        font-size: 12px;
+        font-weight: 600;
+      ">✓ Saved!</span>
+    </div>
+  `;
+}
+
+/**
+ * Toggle settings panel visibility
+ */
+function toggleSettingsPanel() {
+  const content = document.getElementById('settings-content');
+  const chevron = document.getElementById('settings-chevron');
+
+  if (!content || !chevron) return;
+
+  const isHidden = content.style.display === 'none';
+
+  if (isHidden) {
+    content.style.display = 'block';
+    chevron.style.transform = 'rotate(180deg)';
+  } else {
+    content.style.display = 'none';
+    chevron.style.transform = 'rotate(0deg)';
+  }
+}
+
+/**
  * Send message to background and wait for response
  */
 function sendMessage<T extends Message>(message: T): Promise<any> {
   return new Promise((resolve) => {
     chrome.runtime.sendMessage(message, resolve);
   });
+}
+
+/**
+ * Load settings from storage and populate form
+ */
+async function loadSettings() {
+  try {
+    const response = await sendMessage({ type: 'GET_SETTINGS' });
+
+    if (response.settings) {
+      const settings = response.settings;
+
+      // Populate form fields
+      const resumeEl = document.getElementById('settings-resume') as HTMLTextAreaElement;
+      const stacksEl = document.getElementById('settings-stacks') as HTMLInputElement;
+      const rolesEl = document.getElementById('settings-roles') as HTMLInputElement;
+      const remoteEl = document.getElementById('settings-remote') as HTMLInputElement;
+      const hybridEl = document.getElementById('settings-hybrid') as HTMLInputElement;
+      const onsiteEl = document.getElementById('settings-onsite') as HTMLInputElement;
+
+      if (resumeEl) resumeEl.value = settings.resume || '';
+      if (stacksEl) stacksEl.value = settings.preferredStacks?.join(', ') || '';
+      if (rolesEl) rolesEl.value = settings.preferredRoles?.join(', ') || '';
+      if (remoteEl) remoteEl.checked = settings.locationPreferences?.remote || false;
+      if (hybridEl) hybridEl.checked = settings.locationPreferences?.hybrid || false;
+      if (onsiteEl) onsiteEl.checked = settings.locationPreferences?.onsite || false;
+
+      console.log('[Content] Settings loaded successfully');
+    }
+  } catch (error) {
+    console.error('[Content] Failed to load settings:', error);
+  }
+}
+
+/**
+ * Save settings to storage
+ */
+async function saveSettings() {
+  try {
+    // Get form values
+    const resumeEl = document.getElementById('settings-resume') as HTMLTextAreaElement;
+    const stacksEl = document.getElementById('settings-stacks') as HTMLInputElement;
+    const rolesEl = document.getElementById('settings-roles') as HTMLInputElement;
+    const remoteEl = document.getElementById('settings-remote') as HTMLInputElement;
+    const hybridEl = document.getElementById('settings-hybrid') as HTMLInputElement;
+    const onsiteEl = document.getElementById('settings-onsite') as HTMLInputElement;
+
+    const resume = resumeEl?.value || '';
+    const stacks = stacksEl?.value ? stacksEl.value.split(',').map(s => s.trim()).filter(s => s) : [];
+    const roles = rolesEl?.value ? rolesEl.value.split(',').map(r => r.trim()).filter(r => r) : [];
+    const remote = remoteEl?.checked || false;
+    const hybrid = hybridEl?.checked || false;
+    const onsite = onsiteEl?.checked || false;
+
+    // Send to background
+    await sendMessage({
+      type: 'UPDATE_SETTINGS',
+      settings: {
+        resume,
+        preferredStacks: stacks,
+        preferredRoles: roles,
+        locationPreferences: {
+          remote,
+          hybrid,
+          onsite,
+          cities: []
+        }
+      }
+    });
+
+    // Show success indicator
+    const indicator = document.getElementById('settings-saved-indicator');
+    if (indicator) {
+      indicator.style.display = 'inline';
+      setTimeout(() => {
+        indicator.style.display = 'none';
+      }, 2000);
+    }
+
+    console.log('[Content] Settings saved successfully');
+  } catch (error) {
+    console.error('[Content] Failed to save settings:', error);
+    alert('Failed to save settings. Please try again.');
+  }
 }
 
 /**
@@ -236,9 +482,55 @@ function getScoreColor(score: number): string {
 }
 
 /**
+ * Save a decision for a job
+ */
+async function saveDecision(jobId: string, decision: 'thumbs_up' | 'thumbs_down') {
+  try {
+    await sendMessage({
+      type: 'SAVE_DECISION',
+      jobId,
+      decision
+    });
+
+    // Update current jobs state
+    const job = currentJobs.find(j => j.id === jobId);
+    if (job) {
+      job.decision = decision;
+    }
+
+    console.log(`[Content] Decision saved for ${jobId}: ${decision}`);
+  } catch (error) {
+    console.error('[Content] Failed to save decision:', error);
+  }
+}
+
+/**
+ * Handle decision button click
+ */
+async function handleDecisionClick(event: Event) {
+  const target = event.target as HTMLElement;
+  if (!target.classList.contains('decision-btn')) return;
+
+  const jobId = target.dataset.jobId;
+  const action = target.dataset.action as 'thumbs_up' | 'thumbs_down';
+
+  if (!jobId || !action) return;
+
+  // Save decision
+  await saveDecision(jobId, action);
+
+  // Re-render jobs to update UI
+  const atsType = currentJobs[0]?.company ? null : null; // TODO: Store ATS type
+  displayScoredJobs(currentJobs, atsType);
+}
+
+/**
  * Display scored jobs in the results area
  */
 function displayScoredJobs(jobs: Job[], atsType: string | null = null) {
+  // Update current jobs state
+  currentJobs = jobs;
+
   const resultsEl = document.getElementById('job-triage-results');
   if (!resultsEl) return;
 
@@ -264,15 +556,27 @@ function displayScoredJobs(jobs: Job[], atsType: string | null = null) {
   const jobsHTML = jobs.map((job, index) => {
     const scoreColor = getScoreColor(job.score || 0);
     const topReasons = (job.reasons || []).slice(0, 2);
+    const hasDecision = !!job.decision;
+    const isKept = job.decision === 'thumbs_up';
+    const isSkipped = job.decision === 'thumbs_down';
+
+    // Style based on decision
+    const cardStyle = isSkipped
+      ? 'opacity: 0.5; background: #f5f5f5;'
+      : isKept
+        ? 'background: #f1f8f4; border-left: 3px solid #4CAF50;'
+        : index < 3
+          ? `border-left: 3px solid ${scoreColor};`
+          : '';
 
     return `
-      <div style="
+      <div class="job-card" data-job-id="${job.id}" style="
         margin-bottom: 12px;
         padding: 12px;
         border: 1px solid #ddd;
         border-radius: 4px;
         font-size: 13px;
-        ${index < 3 ? 'border-left: 3px solid ' + scoreColor + ';' : ''}
+        ${cardStyle}
       ">
         <div style="display: flex; align-items: center; margin-bottom: 4px;">
           <div style="
@@ -285,6 +589,7 @@ function displayScoredJobs(jobs: Job[], atsType: string | null = null) {
             margin-right: 8px;
           ">${(job.score || 0).toFixed(1)}</div>
           <div style="font-weight: 600; flex: 1;">${job.title}</div>
+          ${hasDecision ? `<span style="font-size: 16px; margin-left: 8px;">${isKept ? '👍' : '👎'}</span>` : ''}
         </div>
         ${job.location ? `<div style="color: #666; margin-bottom: 4px; font-size: 12px;">📍 ${job.location}</div>` : ''}
         ${job.company ? `<div style="color: #666; margin-bottom: 4px; font-size: 12px;">🏢 ${job.company}</div>` : ''}
@@ -293,12 +598,51 @@ function displayScoredJobs(jobs: Job[], atsType: string | null = null) {
             ${topReasons.map(r => `<div style="margin-bottom: 2px;">${r}</div>`).join('')}
           </div>
         ` : ''}
-        <a href="${job.url}" target="_blank" style="color: #1976d2; text-decoration: none; font-size: 12px;">
-          View Job →
-        </a>
+        <div style="margin-top: 8px; display: flex; gap: 8px; align-items: center;">
+          <button
+            class="decision-btn"
+            data-job-id="${job.id}"
+            data-action="thumbs-up"
+            style="
+              padding: 6px 12px;
+              background: ${isKept ? '#4CAF50' : '#fff'};
+              color: ${isKept ? '#fff' : '#333'};
+              border: 1px solid ${isKept ? '#4CAF50' : '#ddd'};
+              border-radius: 4px;
+              font-size: 12px;
+              cursor: pointer;
+              font-weight: ${isKept ? '600' : '400'};
+            "
+          >👍 Keep</button>
+          <button
+            class="decision-btn"
+            data-job-id="${job.id}"
+            data-action="thumbs-down"
+            style="
+              padding: 6px 12px;
+              background: ${isSkipped ? '#9E9E9E' : '#fff'};
+              color: ${isSkipped ? '#fff' : '#333'};
+              border: 1px solid ${isSkipped ? '#9E9E9E' : '#ddd'};
+              border-radius: 4px;
+              font-size: 12px;
+              cursor: pointer;
+              font-weight: ${isSkipped ? '600' : '400'};
+            "
+          >👎 Skip</button>
+          <a href="${job.url}" target="_blank" style="
+            color: #1976d2;
+            text-decoration: none;
+            font-size: 12px;
+            margin-left: auto;
+          ">Open →</a>
+        </div>
       </div>
     `;
   }).join('');
+
+  // Calculate stats
+  const keptCount = jobs.filter(j => j.decision === 'thumbs_up').length;
+  const skippedCount = jobs.filter(j => j.decision === 'thumbs_down').length;
 
   resultsEl.innerHTML = `
     ${atsInfo}
@@ -306,7 +650,46 @@ function displayScoredJobs(jobs: Job[], atsType: string | null = null) {
       Found ${jobs.length} job${jobs.length === 1 ? '' : 's'} (sorted by score)
     </div>
     ${jobsHTML}
+    <div id="job-triage-footer" style="
+      margin-top: 16px;
+      padding-top: 12px;
+      border-top: 1px solid #ddd;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+    ">
+      <button id="open-all-kept" style="
+        padding: 8px 12px;
+        background: #4CAF50;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        ${keptCount === 0 ? 'opacity: 0.5; cursor: not-allowed;' : ''}
+      " ${keptCount === 0 ? 'disabled' : ''}>
+        Open all 👍 (${keptCount})
+      </button>
+      <div style="color: #666;">
+        <span style="color: #4CAF50; font-weight: 600;">Kept: ${keptCount}</span>
+        <span style="margin: 0 8px;">|</span>
+        <span style="color: #9E9E9E; font-weight: 600;">Skipped: ${skippedCount}</span>
+      </div>
+    </div>
   `;
+
+  // Wire up "Open all 👍" button
+  const openAllBtn = document.getElementById('open-all-kept');
+  if (openAllBtn && keptCount > 0) {
+    openAllBtn.addEventListener('click', () => {
+      const keptJobs = jobs.filter(j => j.decision === 'thumbs_up');
+      keptJobs.forEach(job => {
+        window.open(job.url, '_blank');
+      });
+    });
+  }
 }
 
 /**
@@ -418,6 +801,27 @@ function init() {
   const overlay = createOverlay();
   document.body.appendChild(overlay);
 
+  // Populate settings form
+  const settingsContent = document.getElementById('settings-content');
+  if (settingsContent) {
+    settingsContent.innerHTML = createSettingsForm();
+  }
+
+  // Add settings toggle handler
+  const settingsToggle = document.getElementById('settings-toggle');
+  if (settingsToggle) {
+    settingsToggle.addEventListener('click', toggleSettingsPanel);
+  }
+
+  // Add save settings button handler
+  const saveSettingsBtn = document.getElementById('save-settings-btn');
+  if (saveSettingsBtn) {
+    saveSettingsBtn.addEventListener('click', saveSettings);
+  }
+
+  // Load settings into form
+  loadSettings();
+
   // Add close button handler
   const closeBtn = document.getElementById('job-triage-close');
   if (closeBtn) {
@@ -430,6 +834,12 @@ function init() {
   const scanBtn = document.getElementById('job-triage-scan-btn');
   if (scanBtn) {
     scanBtn.addEventListener('click', handleScan);
+  }
+
+  // Add decision button handler (event delegation)
+  const resultsContainer = document.getElementById('job-triage-results');
+  if (resultsContainer) {
+    resultsContainer.addEventListener('click', handleDecisionClick);
   }
 }
 
