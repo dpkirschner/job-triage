@@ -350,6 +350,69 @@ describe('JobStorage - Bulk operations', () => {
   it('should handle empty array in saveMany', async () => {
     await expect(JobStorage.saveMany([])).resolves.not.toThrow();
   });
+
+  it('should load jobs by URLs', async () => {
+    const job1 = createMockJob({ id: 'job-1', url: 'https://example.com/job/1', title: 'Job 1' });
+    const job2 = createMockJob({ id: 'job-2', url: 'https://example.com/job/2', title: 'Job 2' });
+    const job3 = createMockJob({ id: 'job-3', url: 'https://example.com/job/3', title: 'Job 3' });
+
+    await JobStorage.saveMany([job1, job2, job3]);
+
+    const urls = ['https://example.com/job/1', 'https://example.com/job/3'];
+    const results = await JobStorage.getByUrls(urls);
+
+    expect(results).toHaveLength(2);
+    expect(results.map(j => j.id).sort()).toEqual(['job-1', 'job-3']);
+  });
+
+  it('should return empty array for URLs that do not exist', async () => {
+    const urls = ['https://example.com/job/nonexistent1', 'https://example.com/job/nonexistent2'];
+    const results = await JobStorage.getByUrls(urls);
+
+    expect(results).toHaveLength(0);
+  });
+
+  it('should handle empty URL array in getByUrls', async () => {
+    const results = await JobStorage.getByUrls([]);
+    expect(results).toHaveLength(0);
+  });
+
+  it('should handle mixed existing and non-existing URLs', async () => {
+    const job1 = createMockJob({ id: 'job-1', url: 'https://example.com/job/1' });
+    await JobStorage.save(job1);
+
+    const urls = [
+      'https://example.com/job/1',
+      'https://example.com/job/nonexistent'
+    ];
+    const results = await JobStorage.getByUrls(urls);
+
+    expect(results).toHaveLength(1);
+    expect(results[0].id).toBe('job-1');
+  });
+
+  it('should load multiple jobs efficiently in bulk', async () => {
+    await JobStorage.clear();
+
+    // Create 20 jobs
+    const jobs = Array.from({ length: 20 }, (_, i) =>
+      createMockJob({
+        id: `job-${i}`,
+        url: `https://example.com/job/${i}`,
+        title: `Job ${i}`
+      })
+    );
+
+    await JobStorage.saveMany(jobs);
+
+    const urls = jobs.map(j => j.url);
+    const start = Date.now();
+    const results = await JobStorage.getByUrls(urls);
+    const duration = Date.now() - start;
+
+    expect(results).toHaveLength(20);
+    expect(duration).toBeLessThan(100); // Should be fast (< 100ms)
+  });
 });
 
 describe('JobStorage - Count operations', () => {

@@ -48,6 +48,14 @@ chrome.runtime.onMessage.addListener((message: Message, sender, sendResponse) =>
       handleSaveDecision(message.jobId, message.decision).then(sendResponse);
       return true; // Async response
 
+    case 'CHECK_CACHED_JOBS':
+      handleCheckCachedJobs(message.urls).then(sendResponse);
+      return true; // Async response
+
+    case 'LOAD_CACHED_JOBS':
+      handleLoadCachedJobs(message.urls).then(sendResponse);
+      return true; // Async response
+
     default:
       console.warn('[Job Triage] Unknown message type:', message);
       sendResponse({ error: 'Unknown message type' });
@@ -218,6 +226,65 @@ async function handleSaveDecision(jobId: string, decision: 'thumbs_up' | 'thumbs
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to save decision'
+    };
+  }
+}
+
+/**
+ * Check which URLs are cached and which are new
+ */
+async function handleCheckCachedJobs(urls: string[]) {
+  try {
+    const cachedUrls: string[] = [];
+    const newUrls: string[] = [];
+
+    // Check each URL to see if it exists in storage
+    for (const url of urls) {
+      const exists = await JobStorage.exists(url);
+      if (exists) {
+        cachedUrls.push(url);
+      } else {
+        newUrls.push(url);
+      }
+    }
+
+    console.log(`[Job Triage] Cache check: ${cachedUrls.length} cached, ${newUrls.length} new`);
+
+    return {
+      type: 'CHECK_CACHED_JOBS_RESPONSE',
+      cachedUrls,
+      newUrls,
+    };
+  } catch (error) {
+    console.error('[Job Triage] Error checking cached jobs:', error);
+    return {
+      type: 'CHECK_CACHED_JOBS_RESPONSE',
+      cachedUrls: [],
+      newUrls: urls, // Treat all as new on error
+      error: error instanceof Error ? error.message : 'Failed to check cache'
+    };
+  }
+}
+
+/**
+ * Load cached jobs by URLs
+ */
+async function handleLoadCachedJobs(urls: string[]) {
+  try {
+    const jobs = await JobStorage.getByUrls(urls);
+
+    console.log(`[Job Triage] Loaded ${jobs.length} cached jobs`);
+
+    return {
+      type: 'LOAD_CACHED_JOBS_RESPONSE',
+      jobs,
+    };
+  } catch (error) {
+    console.error('[Job Triage] Error loading cached jobs:', error);
+    return {
+      type: 'LOAD_CACHED_JOBS_RESPONSE',
+      jobs: [],
+      error: error instanceof Error ? error.message : 'Failed to load cached jobs'
     };
   }
 }

@@ -101,7 +101,11 @@ export type Message =
   | { type: 'GET_SETTINGS' }
   | { type: 'GET_SETTINGS_RESPONSE'; settings: Settings }
   | { type: 'UPDATE_SETTINGS'; settings: Partial<Settings> }
-  | { type: 'SAVE_DECISION'; jobId: string; decision: 'thumbs_up' | 'thumbs_down' };
+  | { type: 'SAVE_DECISION'; jobId: string; decision: 'thumbs_up' | 'thumbs_down' }
+  | { type: 'CHECK_CACHED_JOBS'; urls: string[] }
+  | { type: 'CHECK_CACHED_JOBS_RESPONSE'; cachedUrls: string[]; newUrls: string[] }
+  | { type: 'LOAD_CACHED_JOBS'; urls: string[] }
+  | { type: 'LOAD_CACHED_JOBS_RESPONSE'; jobs: Job[] };
 
 /**
  * Storage keys for IndexedDB and chrome.storage

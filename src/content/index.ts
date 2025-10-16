@@ -399,7 +399,7 @@ async function computeScore(job: Partial<Job>): Promise<{ score: number; reasons
 }
 
 /**
- * Process jobs with concurrent fetching and scoring
+ * Process jobs with concurrent fetching and scoring (cache-aware)
  */
 async function processJobs(
   scannedJobs: ScannedJob[],
@@ -408,64 +408,97 @@ async function processJobs(
   const results: Job[] = [];
   const total = scannedJobs.length;
 
-  // Process jobs with concurrency limit
-  const maxConcurrent = PERFORMANCE.MAX_CONCURRENT_FETCHES;
+  // Step 1: Check which jobs are cached
+  onProgress?.(0, total, 'checking cache');
 
-  for (let i = 0; i < scannedJobs.length; i += maxConcurrent) {
-    const batch = scannedJobs.slice(i, Math.min(i + maxConcurrent, scannedJobs.length));
+  const urls = scannedJobs.map(j => j.url);
+  const cacheCheckResponse = await sendMessage({
+    type: 'CHECK_CACHED_JOBS',
+    urls
+  });
 
-    // Fetch job details in parallel for this batch
-    const fetchPromises = batch.map(async (scannedJob, batchIndex) => {
-      const jobIndex = i + batchIndex;
-      onProgress?.(jobIndex + 1, total, 'fetching');
+  const cachedUrls = new Set(cacheCheckResponse.cachedUrls || []);
+  const newUrls = new Set(cacheCheckResponse.newUrls || urls);
 
-      const jobDetails = await fetchJobDetails(scannedJob.url);
+  console.log(`[Content] Cache check: ${cachedUrls.size} cached, ${newUrls.size} new`);
 
-      if (!jobDetails || !jobDetails.description) {
-        // Return job without description (won't be scored)
-        return {
+  // Step 2: Load cached jobs
+  if (cachedUrls.size > 0) {
+    onProgress?.(0, total, 'loading cache');
+
+    const cachedJobsResponse = await sendMessage({
+      type: 'LOAD_CACHED_JOBS',
+      urls: Array.from(cachedUrls)
+    });
+
+    const cachedJobs = cachedJobsResponse.jobs || [];
+    results.push(...cachedJobs);
+
+    console.log(`[Content] Loaded ${cachedJobs.length} cached jobs`);
+  }
+
+  // Step 3: Process only new jobs (not in cache)
+  const newJobs = scannedJobs.filter(j => newUrls.has(j.url));
+
+  if (newJobs.length > 0) {
+    const maxConcurrent = PERFORMANCE.MAX_CONCURRENT_FETCHES;
+
+    for (let i = 0; i < newJobs.length; i += maxConcurrent) {
+      const batch = newJobs.slice(i, Math.min(i + maxConcurrent, newJobs.length));
+
+      // Fetch job details in parallel for this batch
+      const fetchPromises = batch.map(async (scannedJob, batchIndex) => {
+        const jobIndex = cachedUrls.size + i + batchIndex;
+        onProgress?.(jobIndex + 1, total, 'fetching');
+
+        const jobDetails = await fetchJobDetails(scannedJob.url);
+
+        if (!jobDetails || !jobDetails.description) {
+          // Return job without description (won't be scored)
+          return {
+            id: normalizeJobUrl(scannedJob.url),
+            url: scannedJob.url,
+            title: scannedJob.title,
+            location: scannedJob.location,
+            company: scannedJob.company,
+            description: '',
+            score: 0,
+            reasons: ['⚠ Description unavailable'],
+            firstSeen: Date.now(),
+            lastUpdated: Date.now()
+          } as Job;
+        }
+
+        // Score the job
+        onProgress?.(jobIndex + 1, total, 'scoring');
+
+        const scoreResult = await computeScore({
+          ...jobDetails,
+          title: scannedJob.title,
+          location: scannedJob.location,
+          company: scannedJob.company
+        });
+
+        // Create full job object
+        const job: Job = {
           id: normalizeJobUrl(scannedJob.url),
           url: scannedJob.url,
           title: scannedJob.title,
           location: scannedJob.location,
           company: scannedJob.company,
-          description: '',
-          score: 0,
-          reasons: ['⚠ Description unavailable'],
+          description: jobDetails.description || '',
+          score: scoreResult?.score || 0,
+          reasons: scoreResult?.reasons || ['⚠ Scoring failed'],
           firstSeen: Date.now(),
           lastUpdated: Date.now()
-        } as Job;
-      }
+        };
 
-      // Score the job
-      onProgress?.(jobIndex + 1, total, 'scoring');
-
-      const scoreResult = await computeScore({
-        ...jobDetails,
-        title: scannedJob.title,
-        location: scannedJob.location,
-        company: scannedJob.company
+        return job;
       });
 
-      // Create full job object
-      const job: Job = {
-        id: normalizeJobUrl(scannedJob.url),
-        url: scannedJob.url,
-        title: scannedJob.title,
-        location: scannedJob.location,
-        company: scannedJob.company,
-        description: jobDetails.description || '',
-        score: scoreResult?.score || 0,
-        reasons: scoreResult?.reasons || ['⚠ Scoring failed'],
-        firstSeen: Date.now(),
-        lastUpdated: Date.now()
-      };
-
-      return job;
-    });
-
-    const batchResults = await Promise.all(fetchPromises);
-    results.push(...batchResults);
+      const batchResults = await Promise.all(fetchPromises);
+      results.push(...batchResults);
+    }
   }
 
   // Sort by score descending
@@ -560,6 +593,13 @@ function displayScoredJobs(jobs: Job[], atsType: string | null = null) {
     const isKept = job.decision === 'thumbs_up';
     const isSkipped = job.decision === 'thumbs_down';
 
+    // Check if job was cached (has a lastUpdated time that's not recent)
+    const age = Date.now() - (job.lastUpdated || Date.now());
+    const isCached = age > 60000; // More than 1 minute old = cached
+    const ageInHours = Math.floor(age / (1000 * 60 * 60));
+    const ageInDays = Math.floor(ageInHours / 24);
+    const ageText = ageInDays > 0 ? `${ageInDays}d ago` : ageInHours > 0 ? `${ageInHours}h ago` : 'just now';
+
     // Style based on decision
     const cardStyle = isSkipped
       ? 'opacity: 0.5; background: #f5f5f5;'
@@ -589,10 +629,20 @@ function displayScoredJobs(jobs: Job[], atsType: string | null = null) {
             margin-right: 8px;
           ">${(job.score || 0).toFixed(1)}</div>
           <div style="font-weight: 600; flex: 1;">${job.title}</div>
+          ${isCached ? `<span style="
+            background: #e3f2fd;
+            color: #1976d2;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 11px;
+            margin-left: 4px;
+            font-weight: 500;
+          " title="Loaded from cache (${ageText})">📦 Cached</span>` : ''}
           ${hasDecision ? `<span style="font-size: 16px; margin-left: 8px;">${isKept ? '👍' : '👎'}</span>` : ''}
         </div>
         ${job.location ? `<div style="color: #666; margin-bottom: 4px; font-size: 12px;">📍 ${job.location}</div>` : ''}
         ${job.company ? `<div style="color: #666; margin-bottom: 4px; font-size: 12px;">🏢 ${job.company}</div>` : ''}
+        ${isCached ? `<div style="color: #999; margin-bottom: 4px; font-size: 11px;">Last updated: ${ageText}</div>` : ''}
         ${topReasons.length > 0 ? `
           <div style="margin-top: 8px; margin-bottom: 8px; font-size: 12px; color: #555;">
             ${topReasons.map(r => `<div style="margin-bottom: 2px;">${r}</div>`).join('')}
@@ -699,12 +749,21 @@ function updateProgress(current: number, total: number, stage: string) {
   const resultsEl = document.getElementById('job-triage-results');
   if (!resultsEl) return;
 
-  const stageText = stage === 'fetching' ? 'Fetching job details' : 'Scoring jobs';
+  const stageTexts: Record<string, string> = {
+    'checking cache': 'Checking cache',
+    'loading cache': 'Loading cached jobs',
+    'fetching': 'Fetching job details',
+    'scoring': 'Scoring jobs'
+  };
+
+  const stageText = stageTexts[stage] || stage;
   const percentage = Math.round((current / total) * 100);
+
+  const icon = stage === 'loading cache' || stage === 'checking cache' ? '📦' : '🔍';
 
   resultsEl.innerHTML = `
     <div style="text-align: center; color: #666;">
-      <div style="margin-bottom: 12px; font-size: 18px;">🔍</div>
+      <div style="margin-bottom: 12px; font-size: 18px;">${icon}</div>
       <div style="font-weight: 600; margin-bottom: 8px;">${stageText}...</div>
       <div style="margin-bottom: 12px; color: #999; font-size: 13px;">
         ${current} / ${total} (${percentage}%)

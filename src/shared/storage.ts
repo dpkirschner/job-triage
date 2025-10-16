@@ -353,6 +353,41 @@ export const JobStorage = {
     });
   },
 
+  async getByUrls(urls: string[]): Promise<Job[]> {
+    const db = await initDatabase();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(StorageKeys.JOBS, 'readonly');
+      const store = transaction.objectStore(StorageKeys.JOBS);
+      const index = store.index('url');
+      const results: Job[] = [];
+      let completed = 0;
+
+      for (const url of urls) {
+        const request = index.get(url);
+        request.onsuccess = () => {
+          if (request.result) {
+            results.push(request.result);
+          }
+          completed++;
+          if (completed === urls.length) {
+            resolve(results);
+          }
+        };
+        request.onerror = () => {
+          completed++;
+          if (completed === urls.length) {
+            resolve(results);
+          }
+        };
+      }
+
+      // Handle empty array
+      if (urls.length === 0) {
+        resolve([]);
+      }
+    });
+  },
+
   // Count operations
   async count(): Promise<number> {
     return count(StorageKeys.JOBS);
