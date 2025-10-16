@@ -14,13 +14,22 @@ declare global {
   }
 }
 
+// Check if already loaded and show overlay if it exists
 if (window.__jobTriageContentLoaded) {
-  console.log('[Job Triage] Content script already loaded, skipping initialization');
-  throw new Error('Job Triage already initialized'); // Stop script execution
+  console.log('[Job Triage] Content script already loaded, showing overlay');
+  const existingOverlay = document.getElementById(OVERLAY.CONTAINER_ID);
+  if (existingOverlay) {
+    (existingOverlay as HTMLElement).style.display = 'flex';
+  } else {
+    console.warn('[Job Triage] Flag set but overlay not found, will re-initialize');
+    window.__jobTriageContentLoaded = false;
+  }
 }
-window.__jobTriageContentLoaded = true;
 
-console.log('[Job Triage] Content script loaded');
+// Only set flag and initialize if not already loaded OR if overlay was missing
+if (!window.__jobTriageContentLoaded) {
+  window.__jobTriageContentLoaded = true;
+  console.log('[Job Triage] Content script loaded');
 
 /**
  * Current jobs state (for updating decisions)
@@ -917,3 +926,5 @@ function init() {
 
 // Start initialization
 init();
+
+} // End of initialization guard

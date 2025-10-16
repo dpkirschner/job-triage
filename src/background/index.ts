@@ -304,12 +304,12 @@ chrome.action.onClicked.addListener(async (tab) => {
     // Check if already injected
     const results = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      func: () => (window as any).__jobTriageInitialized === true
+      func: () => (window as any).__jobTriageContentLoaded === true
     });
 
     if (results[0]?.result === true) {
-      console.log('[Job Triage] Already initialized on this tab');
-      return;
+      console.log('[Job Triage] Already initialized on this tab, re-injecting to show overlay');
+      // Fall through to inject again - the content script will handle showing the overlay
     }
 
     // Inject the content script files into isolated world
