@@ -92,3 +92,4 @@ bd dep tree issue-1              # Visualize dependencies
 ---
 
 **Remember**: Consult the docs/ directory for detailed product and technical specs before implementing features. All design decisions should optimize for privacy, low latency, and local-first operation.
+- always concisely explain the problem, and your suggested solution, before beginning work

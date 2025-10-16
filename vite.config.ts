@@ -78,8 +78,10 @@ const backgroundScriptConfig: UserConfig = {
       fileName: () => 'background/index.js',
     },
     rollupOptions: {
+      external: [], // Bundle all dependencies (don't externalize)
       output: {
         entryFileNames: 'background/index.js',
+        inlineDynamicImports: true, // Inline all imports into single file
       },
     },
   },

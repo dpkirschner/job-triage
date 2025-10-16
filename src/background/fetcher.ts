@@ -2,6 +2,7 @@
  * Job fetcher with concurrency control, caching, and retry logic
  */
 
+import { DOMParser } from 'linkedom';
 import { JobStorage } from '@/shared/storage';
 import { PERFORMANCE, CACHE } from '@/shared/constants';
 import type { Job } from '@/shared/types';
