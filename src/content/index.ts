@@ -37,6 +37,11 @@ if (!window.__jobTriageContentLoaded) {
 let currentJobs: Job[] = [];
 
 /**
+ * Current scan limit (default: 1 job)
+ */
+let scanLimit = 1;
+
+/**
  * Check if overlay already exists
  */
 function overlayExists(): boolean {
@@ -129,10 +134,10 @@ function createOverlay(): HTMLElement {
       </div>
     </div>
 
-    <!-- Scan Button -->
-    <div style="margin-bottom: 16px;">
+    <!-- Scan Button with Limit -->
+    <div style="margin-bottom: 16px; display: flex; gap: 8px; align-items: center;">
       <button id="job-triage-scan-btn" style="
-        width: 100%;
+        flex: 1;
         padding: 12px;
         background: #4CAF50;
         color: white;
@@ -142,6 +147,27 @@ function createOverlay(): HTMLElement {
         font-weight: 600;
         cursor: pointer;
       ">Scan This Page</button>
+      <div style="display: flex; align-items: center; gap: 6px; white-space: nowrap;">
+        <label for="scan-limit" style="font-size: 13px; color: #666; font-weight: 500;">Max:</label>
+        <select id="scan-limit" style="
+          padding: 8px;
+          border: 1px solid #ddd;
+          border-radius: 4px;
+          font-size: 13px;
+          cursor: pointer;
+          background: white;
+        ">
+          <option value="1" selected>1</option>
+          <option value="5">5</option>
+          <option value="10">10</option>
+          <option value="15">15</option>
+          <option value="20">20</option>
+          <option value="25">25</option>
+          <option value="30">30</option>
+          <option value="50">50</option>
+          <option value="100">100</option>
+        </select>
+      </div>
     </div>
 
     <!-- Results Container -->
@@ -582,7 +608,7 @@ async function handleDecisionClick(event: Event) {
 /**
  * Display scored jobs in the results area
  */
-function displayScoredJobs(jobs: Job[], atsType: string | null = null) {
+function displayScoredJobs(jobs: Job[], atsType: string | null = null, totalFound?: number) {
   // Update current jobs state
   currentJobs = jobs;
 
@@ -719,7 +745,10 @@ function displayScoredJobs(jobs: Job[], atsType: string | null = null) {
   resultsEl.innerHTML = `
     ${atsInfo}
     <div style="margin-bottom: 12px; font-weight: 600; color: #333;">
-      Found ${jobs.length} job${jobs.length === 1 ? '' : 's'} (sorted by score)
+      ${totalFound && totalFound > jobs.length
+        ? `Found ${totalFound} jobs, showing ${jobs.length} (sorted by score)`
+        : `Found ${jobs.length} job${jobs.length === 1 ? '' : 's'} (sorted by score)`
+      }
     </div>
     ${jobsHTML}
     <div id="job-triage-footer" style="
@@ -837,13 +866,18 @@ async function handleScan() {
       return;
     }
 
-    console.log(`[Content] Scanned ${scanResult.foundCount} jobs, fetching details and scoring...`);
+    // Apply scan limit
+    const totalFound = scanResult.foundCount;
+    const jobsToProcess = scanResult.jobs.slice(0, scanLimit);
+    const limitApplied = totalFound > scanLimit;
+
+    console.log(`[Content] Found ${totalFound} jobs, processing first ${jobsToProcess.length} (limit: ${scanLimit})`);
 
     // Step 2: Fetch job details and score jobs
-    const scoredJobs = await processJobs(scanResult.jobs, updateProgress);
+    const scoredJobs = await processJobs(jobsToProcess, updateProgress);
 
     // Step 3: Display scored jobs
-    displayScoredJobs(scoredJobs, scanResult.atsType);
+    displayScoredJobs(scoredJobs, scanResult.atsType, limitApplied ? totalFound : undefined);
 
     console.log(`[Content] Successfully processed ${scoredJobs.length} jobs`);
 
@@ -915,6 +949,16 @@ function init() {
   const scanBtn = document.getElementById('job-triage-scan-btn');
   if (scanBtn) {
     scanBtn.addEventListener('click', handleScan);
+  }
+
+  // Add scan limit dropdown handler
+  const scanLimitSelect = document.getElementById('scan-limit') as HTMLSelectElement;
+  if (scanLimitSelect) {
+    scanLimitSelect.addEventListener('change', (e) => {
+      const target = e.target as HTMLSelectElement;
+      scanLimit = parseInt(target.value, 10);
+      console.log(`[Content] Scan limit updated to ${scanLimit}`);
+    });
   }
 
   // Add decision button handler (event delegation)
