@@ -60,10 +60,10 @@ interface ATSSelectors {
  */
 const ATS_SELECTORS: Record<string, ATSSelectors> = {
   greenhouse: {
-    jobCard: '.opening',
-    title: 'a',
+    jobCard: '.job-post',
+    title: 'a .body--medium, a',
     link: 'a',
-    location: '.location',
+    location: '.body--metadata, .location',
   },
   lever: {
     jobCard: '.posting',
