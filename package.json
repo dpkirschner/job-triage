@@ -5,7 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite build --watch",
-    "build": "vite build",
+    "build": "BUILD_TARGET=content vite build && BUILD_TARGET=background vite build && BUILD_TARGET=options vite build && mv dist/src/options/index.html dist/options/index.html && rm -rf dist/src",
+    "build:content": "BUILD_TARGET=content vite build",
+    "build:background": "BUILD_TARGET=background vite build",
+    "build:options": "BUILD_TARGET=options vite build && mv dist/src/options/index.html dist/options/index.html && rm -rf dist/src",
     "type-check": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",

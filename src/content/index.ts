@@ -7,6 +7,19 @@ import { scanPage, type ScanResult, type ScannedJob } from './scanner';
 import { normalizeJobUrl } from './scanner';
 import type { Message, Job } from '@/shared/types';
 
+// Guard against double-injection (additional safety check)
+declare global {
+  interface Window {
+    __jobTriageContentLoaded?: boolean;
+  }
+}
+
+if (window.__jobTriageContentLoaded) {
+  console.log('[Job Triage] Content script already loaded, skipping initialization');
+  throw new Error('Job Triage already initialized'); // Stop script execution
+}
+window.__jobTriageContentLoaded = true;
+
 console.log('[Job Triage] Content script loaded');
 
 /**

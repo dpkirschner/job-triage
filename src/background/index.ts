@@ -301,7 +301,19 @@ chrome.action.onClicked.addListener(async (tab) => {
   }
 
   try {
-    // Inject the content script into the current tab
+    // Check if already injected
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => (window as any).__jobTriageInitialized === true
+    });
+
+    if (results[0]?.result === true) {
+      console.log('[Job Triage] Already initialized on this tab');
+      return;
+    }
+
+    // Inject the content script files into isolated world
+    // This gives access to chrome.* APIs
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       files: ['content/index.js']

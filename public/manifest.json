@@ -15,7 +15,13 @@
     "service_worker": "background/index.js",
     "type": "module"
   },
-  "options_page": "src/options/index.html",
+  "web_accessible_resources": [
+    {
+      "resources": ["content/index.js"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "options_page": "options/index.html",
   "action": {
     "default_title": "Job Triage - Click to activate on this page"
   }
